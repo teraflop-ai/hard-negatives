@@ -9,13 +9,13 @@ def parse_args():
         "--model_name",
         type=str,
         default="lightonai/DenseOn",
-        help="The sentence transformer model to use."
+        help="The sentence transformer model to use.",
     )
     parser.add_argument(
         "--max_seq_len",
         default=8192,
         type=int,
-        help="The seqlen to use during encoding."
+        help="The seqlen to use during encoding.",
     )
     parser.add_argument(
         "--input_path",
@@ -23,16 +23,8 @@ def parse_args():
         required=True,
         help="The input path to parquet files.",
     )
-    parser.add_argument(
-        "--num_dim",
-        type=int,
-        default=768
-    )
-    parser.add_argument(
-        "--hnsw_m",
-        type=int,
-        default=64
-    )
+    parser.add_argument("--num_dim", type=int, default=768)
+    parser.add_argument("--hnsw_m", type=int, default=64)
     parser.add_argument(
         "--hnsw_ef",
         type=int,
@@ -77,15 +69,9 @@ def parse_args():
         type=int,
         default=2000,
     )
+    parser.add_argument("--query_batch_size", type=int, default=1000)
     parser.add_argument(
-        "--query_batch_size",
-        type=int,
-        default=1000
-    )
-    parser.add_argument(
-        "--path_to_hub_upload",
-        type=str,
-        default="TeraflopAI/mined_example"
+        "--path_to_hub_upload", type=str, default="TeraflopAI/mined_example"
     )
     parser.add_argument(
         "--report_output_dir",

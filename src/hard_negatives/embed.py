@@ -1,5 +1,6 @@
 from accelerate.utils import gather_object
 
+
 def distributed_encode(
     texts,
     process_indices,

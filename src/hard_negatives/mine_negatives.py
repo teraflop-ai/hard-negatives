@@ -1,8 +1,6 @@
-import os
 from pathlib import Path
 
 import sys
-import json
 import numpy as np
 
 from accelerate import Accelerator
@@ -13,14 +11,13 @@ from voyager import Index, Space
 
 from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
+from hard_negatives.reporting import create_report
 
 
 def mine_negatives(args):
     dataset_name = Path(args.input_path).stem
 
-    queries, unique_index_to_doc_text, positives = load_pair_dataset(
-        args.input_path
-    )
+    queries, unique_index_to_doc_text, positives = load_pair_dataset(args.input_path)
 
     model = load_model(args.model_name, args.max_seq_len)
 
@@ -96,11 +93,15 @@ def mine_negatives(args):
         for doc_id, doc_text in unique_index_to_doc_text.items():
             documents_rows.append({"document_id": doc_id, "document": doc_text})
 
-        documents_features = Features({
-            "document_id": Value("int64"),
-            "document": Value("large_string"),
-        })
-        documents_dataset = Dataset.from_list(documents_rows, features=documents_features)
+        documents_features = Features(
+            {
+                "document_id": Value("int64"),
+                "document": Value("large_string"),
+            }
+        )
+        documents_dataset = Dataset.from_list(
+            documents_rows, features=documents_features
+        )
         documents_dataset.push_to_hub(
             args.path_to_hub_upload,
             config_name="documents",
@@ -114,10 +115,12 @@ def mine_negatives(args):
         for query_id, query_text in queries.items():
             queries_rows.append({"query_id": query_id, "query": query_text})
 
-        queries_features = Features({
-            "query_id": Value("int64"),
-            "query": Value("large_string"),
-        })
+        queries_features = Features(
+            {
+                "query_id": Value("int64"),
+                "query": Value("large_string"),
+            }
+        )
         queries_dataset = Dataset.from_list(queries_rows, features=queries_features)
         queries_dataset.push_to_hub(
             args.path_to_hub_upload,
@@ -132,7 +135,9 @@ def mine_negatives(args):
 
         # Batch query the index
         query_ids_list = list(positives.keys())
-        num_query_batches = (len(query_ids_list) + args.query_batch_size - 1) // args.query_batch_size
+        num_query_batches = (
+            len(query_ids_list) + args.query_batch_size - 1
+        ) // args.query_batch_size
 
         all_query_results = {}  # Store results: query_id -> (indexes, distances)
 
@@ -141,14 +146,20 @@ def mine_negatives(args):
             end_idx = min((batch_idx + 1) * args.query_batch_size, len(query_ids_list))
 
             batch_query_ids = query_ids_list[start_idx:end_idx]
-            query_embeddings_batch = [query_id_to_embedding[qid] for qid in batch_query_ids]
+            query_embeddings_batch = [
+                query_id_to_embedding[qid] for qid in batch_query_ids
+            ]
 
             print(
                 f"Querying index for batch {batch_idx + 1}/{num_query_batches} ({len(batch_query_ids)} queries)..."
             )
             # Query with extra buffer to account for potential duplicates and positives
-            k_value = min(args.num_negatives + args.k_buffer, len(unique_index_to_doc_text))
-            batch_indexes, batch_distances = index.query(query_embeddings_batch, k=k_value)
+            k_value = min(
+                args.num_negatives + args.k_buffer, len(unique_index_to_doc_text)
+            )
+            batch_indexes, batch_distances = index.query(
+                query_embeddings_batch, k=k_value
+            )
 
             # Store results
             for i, qid in enumerate(batch_query_ids):
@@ -206,9 +217,9 @@ def mine_negatives(args):
                 )
 
         # Analyze filtering impact
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("Filtering Analysis")
-        print("="*50)
+        print("=" * 50)
         filtered_count = 0
         total_negatives_before = 0
         total_negatives_after = 0
@@ -220,10 +231,12 @@ def mine_negatives(args):
 
             # Apply threshold filter
             threshold_value = args.nvembed_threshold * positive_score
-            filtered_negatives = [score for score in negative_scores if score < threshold_value]
+            filtered_negatives = [
+                score for score in negative_scores if score < threshold_value
+            ]
 
             # Apply max negatives filter if specified
-            filtered_negatives = filtered_negatives[:args.max_negatives_filter]
+            filtered_negatives = filtered_negatives[: args.max_negatives_filter]
 
             total_negatives_after += len(filtered_negatives)
 
@@ -231,37 +244,20 @@ def mine_negatives(args):
             if len(filtered_negatives) >= args.max_negatives_filter:
                 filtered_count += 1
 
-        # Prepare report data
-        report_data = {
-            "dataset_name": dataset_name,
-            "original_rows": len(scores_rows),
-            "rows_after_filtering": filtered_count,
-            "rows_dropped": len(scores_rows) - filtered_count,
-            "retention_rate": filtered_count / len(scores_rows) * 100 if len(scores_rows) > 0 else 0,
-            "nvembed_threshold": args.nvembed_threshold,
-            "min_negatives_required": args.max_negatives_filter,
-        }
+        create_report(
+            args,
+            dataset_name,
+            scores_rows,
+            filtered_count,
+        )
 
-        # Save report to JSON
-        os.makedirs(args.report_output_dir, exist_ok=True)
-        report_path = os.path.join(args.report_output_dir, f"{dataset_name}_filtering_report.json")
-        with open(report_path, "w") as f:
-            json.dump(report_data, f, indent=2)
-
-        print(f"Original rows: {report_data['original_rows']}")
-        print(f"Rows after filtering (>= {args.max_negatives_filter} negatives): {report_data['rows_after_filtering']}")
-        print(f"Rows dropped: {report_data['rows_dropped']}")
-        print(f"Retention rate: {report_data['retention_rate']:.2f}%")
-        print(f"Threshold: {report_data['nvembed_threshold']}")
-        print(f"Min negatives required: {report_data['min_negatives_required'] if report_data['min_negatives_required'] else 'None (keep all)'}")
-        print(f"Report saved to: {report_path}")
-        print("="*50 + "\n")
-
-        scores_features = Features({
-            "query_id": Value("int64"),
-            "document_ids": [Value("int64")],
-            "scores": [Value("float64")],
-        })
+        scores_features = Features(
+            {
+                "query_id": Value("int64"),
+                "document_ids": [Value("int64")],
+                "scores": [Value("float64")],
+            }
+        )
 
         scores_dataset = Dataset.from_list(scores_rows, features=scores_features)
         scores_dataset.push_to_hub(
@@ -273,4 +269,3 @@ def mine_negatives(args):
         print(f"Pushed scores dataset with {len(scores_rows)} query-document pairs")
 
         print(f"All three datasets pushed successfully for {dataset_name}")
-

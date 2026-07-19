@@ -1,6 +1,7 @@
 import torch
 from sentence_transformers import SentenceTransformer
 
+
 def load_model(model_name: str, max_seq_len: int):
     model = SentenceTransformer(
         model_name,
