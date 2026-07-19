@@ -1,3 +1,8 @@
+## Usage
+```bash
+accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/test_pairs.parquet
+```
+
 ```bibtex
 @software{shippole2026hardnegatives,
   title        = {Hard Negatives: A Python Library for Mining Hard Negative Examples},
