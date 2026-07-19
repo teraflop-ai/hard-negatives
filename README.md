@@ -1,7 +1,9 @@
 ## Usage
+Create and upload the mined hard negatives.
 ```bash
-accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/test_pairs.parquet
+accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/parquets/test_pairs.parquet
 ```
+
 
 ```bibtex
 @software{shippole2026hardnegatives,

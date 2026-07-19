@@ -1,7 +1,7 @@
 from datasets import Dataset, Features, Value
 
 
-def upload_text_dataset(
+def save_text_dataset(
     data,
     *,
     id_column,
@@ -9,6 +9,8 @@ def upload_text_dataset(
     config_name,
     dataset_name,
     hub_path,
+    save_path,
+    upload: bool = True
 ):
     dataset = Dataset.from_dict(
         {
@@ -23,11 +25,16 @@ def upload_text_dataset(
         ),
     )
 
-    dataset.push_to_hub(
-        hub_path,
-        config_name=config_name,
-        data_dir=config_name,
-        split=dataset_name,
+    dataset.save_to_disk(
+        save_path,
     )
 
-    print(f"Pushed {config_name} dataset with {len(dataset)} rows")
+    if upload:
+        dataset.push_to_hub(
+            hub_path,
+            config_name=config_name,
+            data_dir=config_name,
+            split=dataset_name,
+        )
+
+        print(f"Pushed {config_name} dataset with {len(dataset)} rows")

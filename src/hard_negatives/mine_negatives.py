@@ -12,7 +12,7 @@ from voyager import Index, Space
 from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
 from hard_negatives.reporting import create_report
-from hard_negatives.upload_dataset import upload_text_dataset
+from hard_negatives.save_dataset import save_text_dataset
 
 
 def mine_negatives(args):
@@ -93,22 +93,26 @@ def mine_negatives(args):
     if accelerator.is_main_process:
         # Prepare three datasets
 
-        upload_text_dataset(
+        save_text_dataset(
             unique_index_to_doc_text,
             id_column="document_id",
             text_column=args.document_column,
             config_name="documents",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
+            save_path=args.save_path,
+            upload=args.upload,
         )
 
-        upload_text_dataset(
+        save_text_dataset(
             queries,
             id_column="query_id",
             text_column=args.query_column,
             config_name="queries",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
+            save_path=args.save_path,
+            upload=args.upload,
         )
 
         # 3. Scores dataset (query_id, document_ids, scores)
@@ -241,12 +245,16 @@ def mine_negatives(args):
         )
 
         scores_dataset = Dataset.from_list(scores_rows, features=scores_features)
-        scores_dataset.push_to_hub(
-            args.path_to_hub_upload,
-            config_name="scores",
-            data_dir="scores",
-            split=dataset_name,
+        scores_dataset.save_to_disk(
+            args.save_path,
         )
-        print(f"Pushed scores dataset with {len(scores_rows)} query-document pairs")
+        if args.upload:
+            scores_dataset.push_to_hub(
+                args.path_to_hub_upload,
+                config_name="scores",
+                data_dir="scores",
+                split=dataset_name,
+            )
+            print(f"Pushed scores dataset with {len(scores_rows)} query-document pairs")
 
         print(f"All three datasets pushed successfully for {dataset_name}")

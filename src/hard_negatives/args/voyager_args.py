@@ -84,6 +84,16 @@ def parse_args():
         "--path_to_hub_upload", type=str, default="TeraflopAI/mined_example"
     )
     parser.add_argument(
+        "--save_path",
+        type=str,
+        default="saved_dataset"
+    )
+    parser.add_argument(
+        "--upload",
+        type=bool,
+        default=True,
+    )
+    parser.add_argument(
         "--report_output_dir",
         type=str,
         default="report_directory",
