@@ -1,3 +1,8 @@
+## Installation
+```bash
+uv pip install hard-negatives
+```
+
 ## Usage
 Mines hard negatives from existing query document pair datasets.
 ```bash
@@ -7,7 +12,7 @@ accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/pa
 ## Contributing
 ```bash
 uvx ruff format
-uvx ruff check --fix
+uvx ruff check --select I --fix .
 ```
 
 ```bibtex

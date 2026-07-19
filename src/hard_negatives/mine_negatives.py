@@ -1,16 +1,15 @@
+import sys
 from pathlib import Path
 
-import sys
 import numpy as np
-
 from accelerate import Accelerator
 from datasets import Dataset, Features, Value
 
 from hard_negatives.data_loader import load_pair_dataset
-from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
-from hard_negatives.save_dataset import save_text_dataset
 from hard_negatives.index_factory import build_index
+from hard_negatives.prepare_model import load_model
+from hard_negatives.save_dataset import save_text_dataset
 
 
 def mine_negatives(args):
