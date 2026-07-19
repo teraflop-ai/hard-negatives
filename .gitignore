@@ -12,3 +12,4 @@ wheels/
 parquets/
 report_directory/
 saved_dataset/
+mined_dataset/

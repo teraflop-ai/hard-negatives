@@ -1,9 +1,14 @@
 ## Usage
-Create and upload the mined hard negatives.
+Mines hard negatives from existing query document pair datasets.
 ```bash
 accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/parquets/test_pairs.parquet
 ```
 
+## Contributing
+```bash
+uvx ruff format
+uvx ruff check --fix
+```
 
 ```bibtex
 @software{shippole2026hardnegatives,

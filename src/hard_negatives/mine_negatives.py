@@ -11,7 +11,6 @@ from voyager import Index, Space
 
 from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
-from hard_negatives.reporting import create_report
 from hard_negatives.save_dataset import save_text_dataset
 
 
@@ -100,7 +99,7 @@ def mine_negatives(args):
             config_name="documents",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
-            save_path=args.save_path,
+            save_path=f"{args.save_path}/documents",
             upload=args.upload,
         )
 
@@ -111,7 +110,7 @@ def mine_negatives(args):
             config_name="queries",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
-            save_path=args.save_path,
+            save_path=f"{args.save_path}/queries",
             upload=args.upload,
         )
 
@@ -201,41 +200,6 @@ def mine_negatives(args):
                     }
                 )
 
-        # Analyze filtering impact
-        print("\n" + "=" * 50)
-        print("Filtering Analysis")
-        print("=" * 50)
-        filtered_count = 0
-        total_negatives_before = 0
-        total_negatives_after = 0
-
-        for row in scores_rows:
-            positive_score = row["scores"][0]  # First score is the positive
-            negative_scores = row["scores"][1:]  # Rest are negatives
-            total_negatives_before += len(negative_scores)
-
-            # Apply threshold filter
-            threshold_value = args.nvembed_threshold * positive_score
-            filtered_negatives = [
-                score for score in negative_scores if score < threshold_value
-            ]
-
-            # Apply max negatives filter if specified
-            filtered_negatives = filtered_negatives[: args.max_negatives_filter]
-
-            total_negatives_after += len(filtered_negatives)
-
-            # Count rows with at least max_negatives_filter negatives after filtering
-            if len(filtered_negatives) >= args.max_negatives_filter:
-                filtered_count += 1
-
-        create_report(
-            args,
-            dataset_name,
-            scores_rows,
-            filtered_count,
-        )
-
         scores_features = Features(
             {
                 "query_id": Value("int64"),
@@ -246,7 +210,7 @@ def mine_negatives(args):
 
         scores_dataset = Dataset.from_list(scores_rows, features=scores_features)
         scores_dataset.save_to_disk(
-            args.save_path,
+            f"{args.save_path}/scores",
         )
         if args.upload:
             scores_dataset.push_to_hub(

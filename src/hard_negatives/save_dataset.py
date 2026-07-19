@@ -10,7 +10,7 @@ def save_text_dataset(
     dataset_name,
     hub_path,
     save_path,
-    upload: bool = True
+    upload: bool = True,
 ):
     dataset = Dataset.from_dict(
         {
