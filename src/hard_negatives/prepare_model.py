@@ -6,7 +6,7 @@ def load_model(model_name: str, max_seq_len: int):
     model = SentenceTransformer(
         model_name,
         model_kwargs={
-            "attn_implementation": "sdpa",
+            "attn_implementation": "flash_attention_2",
             "dtype": torch.bfloat16,
         },
     )
