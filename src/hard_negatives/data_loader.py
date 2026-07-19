@@ -1,17 +1,14 @@
 from datasets import load_dataset
 
 
-def load_pair_dataset(path: str):
+def load_pair_dataset(path: str, query: str = "query", document: str = "document"):
     data = load_dataset("parquet", data_files=path, split="train")
-
-    if set(data.column_names) != {"query", "document"}:
-        raise ValueError("Dataset must contain exactly: query, document")
 
     query_to_id = {}
     document_to_id = {}
     positives = {}
 
-    for query, document in zip(data["query"], data["document"]):
+    for query, document in zip(data[query], data[document]):
         query_id = query_to_id.setdefault(query, len(query_to_id))
         document_id = document_to_id.setdefault(document, len(document_to_id))
         positives.setdefault(query_id, set()).add(document_id)

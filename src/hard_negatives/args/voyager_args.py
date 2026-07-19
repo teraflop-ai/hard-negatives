@@ -69,6 +69,16 @@ def parse_args():
         type=int,
         default=2000,
     )
+    parser.add_argument(
+        "--query_column",
+        type=str,
+        default="query"
+    )
+    parser.add_argument(
+        "--document_column",
+        type=str,
+        default="document"
+    )
     parser.add_argument("--query_batch_size", type=int, default=1000)
     parser.add_argument(
         "--path_to_hub_upload", type=str, default="TeraflopAI/mined_example"

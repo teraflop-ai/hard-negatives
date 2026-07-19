@@ -18,7 +18,11 @@ from hard_negatives.upload_dataset import upload_text_dataset
 def mine_negatives(args):
     dataset_name = Path(args.input_path).stem
 
-    queries, unique_index_to_doc_text, positives = load_pair_dataset(args.input_path)
+    queries, unique_index_to_doc_text, positives = load_pair_dataset(
+        args.input_path,
+        query=args.query_column,
+        document=args.document_column,
+    )
 
     model = load_model(args.model_name, args.max_seq_len)
 
@@ -92,7 +96,7 @@ def mine_negatives(args):
         upload_text_dataset(
             unique_index_to_doc_text,
             id_column="document_id",
-            text_column="document",
+            text_column=args.document_column,
             config_name="documents",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
@@ -101,7 +105,7 @@ def mine_negatives(args):
         upload_text_dataset(
             queries,
             id_column="query_id",
-            text_column="query",
+            text_column=args.query_column,
             config_name="queries",
             dataset_name=dataset_name,
             hub_path=args.path_to_hub_upload,
