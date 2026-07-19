@@ -5,26 +5,19 @@ from datasets import Dataset, Features, Value, load_dataset, load_from_disk
 
 
 def nv_retriever_dataset(
-    *,
-    num_negatives: int,
-    query_column: str = "query",
-    document_column: str = "document",
-    input_path: Optional[str] = None,
+    args,
     repo_id: Optional[str] = None,
     split: str = "train",
-    local: bool = False,
-    nvembed_threshold: Optional[float] = None,
-    output_path: Optional[str] = None,
     output_repo_id: Optional[str] = None,
 ) -> Dataset:
-    if num_negatives < 1:
+    if args.max_num_negatives < 1:
         raise ValueError("num_negatives must be at least 1")
 
-    if local:
-        if input_path is None:
+    if args.local:
+        if args.input_dataset is None:
             raise ValueError("input_path is required when local=True")
 
-        root = Path(input_path)
+        root = Path(args.input_dataset)
         documents_ds = load_from_disk(root / "documents")
         queries_ds = load_from_disk(root / "queries")
         scores_ds = load_from_disk(root / "scores")
@@ -37,14 +30,14 @@ def nv_retriever_dataset(
         scores_ds = load_dataset(repo_id, "scores", split=split)
 
     documents = dict(
-        zip(map(int, documents_ds["document_id"]), documents_ds[document_column])
+        zip(map(int, documents_ds["document_id"]), documents_ds[args.document_column])
     )
-    queries = dict(zip(map(int, queries_ds["query_id"]), queries_ds[query_column]))
+    queries = dict(zip(map(int, queries_ds["query_id"]), queries_ds[args.query_column]))
 
     columns = [
         "anchor",
         "positive",
-        *(f"negative_{i}" for i in range(1, num_negatives + 1)),
+        *(f"negative_{i}" for i in range(1, args.max_num_negatives + 1)),
     ]
     features = Features({column: Value("string") for column in columns})
 
@@ -60,16 +53,15 @@ def nv_retriever_dataset(
             positive_id, positive_score = document_ids[0], scores[0]
             negatives = list(zip(document_ids[1:], scores[1:]))
 
-            if nvembed_threshold is not None:
-                cutoff = nvembed_threshold * positive_score
-                negatives = [
-                    (document_id, score)
-                    for document_id, score in negatives
-                    if score < cutoff
-                ]
+            cutoff = args.nvembed_threshold * positive_score
+            negatives = [
+                (document_id, score)
+                for document_id, score in negatives
+                if score < cutoff
+            ]
 
-            negatives = negatives[:num_negatives]
-            if len(negatives) < num_negatives:
+            negatives = negatives[: args.max_num_negatives]
+            if len(negatives) < args.max_num_negatives:
                 continue
 
             yield {
@@ -83,10 +75,10 @@ def nv_retriever_dataset(
 
     dataset = Dataset.from_generator(rows, features=features)
 
-    if output_path:
-        dataset.save_to_disk(output_path)
+    if args.prepared_dataset:
+        dataset.save_to_disk(args.prepared_dataset)
 
-    target_repo = output_repo_id or (repo_id if not local else None)
+    target_repo = output_repo_id or (repo_id if not args.local else None)
     if target_repo:
         dataset.push_to_hub(target_repo, split=split)
 

@@ -5,13 +5,12 @@ import numpy as np
 
 from accelerate import Accelerator
 from datasets import Dataset, Features, Value
+
 from hard_negatives.data_loader import load_pair_dataset
-
-from voyager import Index, Space
-
 from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
 from hard_negatives.save_dataset import save_text_dataset
+from hard_negatives.index_factory import build_index
 
 
 def mine_negatives(args):
@@ -26,7 +25,7 @@ def mine_negatives(args):
     model = load_model(args.model_name, args.max_seq_len)
 
     accelerator = Accelerator()
-    accelerator.prepare(model)
+    model = accelerator.prepare(model)
 
     # build distributed index for all unique documents
     unique_doc_indices = sorted(unique_index_to_doc_text.keys())
@@ -35,17 +34,17 @@ def mine_negatives(args):
     ]
 
     if accelerator.is_main_process:
-        index = Index(
-            Space.Cosine,
-            num_dimensions=args.num_dim,
-            M=args.hnsw_m,
-            ef_construction=args.hnsw_ef,
-        )
+        index = build_index(args)
+
         doc_id_to_embedding = {}
 
         def handle_documents(embeddings, indices):
-            index.add_items(embeddings, indices)
-            doc_id_to_embedding.update(zip(indices, embeddings))
+            keys = np.asarray(indices, dtype=np.uint64)
+            vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
+            index.add(keys, vectors)
+            doc_id_to_embedding.update(
+                (int(key), vector) for key, vector in zip(keys, vectors)
+            )
     else:
         handle_documents = None
 
@@ -130,9 +129,10 @@ def mine_negatives(args):
             end_idx = min((batch_idx + 1) * args.query_batch_size, len(query_ids_list))
 
             batch_query_ids = query_ids_list[start_idx:end_idx]
-            query_embeddings_batch = [
-                query_id_to_embedding[qid] for qid in batch_query_ids
-            ]
+            query_vectors = np.ascontiguousarray(
+                [query_id_to_embedding[qid] for qid in batch_query_ids],
+                dtype=np.float32,
+            )
 
             print(
                 f"Querying index for batch {batch_idx + 1}/{num_query_batches} ({len(batch_query_ids)} queries)..."
@@ -141,13 +141,18 @@ def mine_negatives(args):
             k_value = min(
                 args.num_negatives + args.k_buffer, len(unique_index_to_doc_text)
             )
-            batch_indexes, batch_distances = index.query(
-                query_embeddings_batch, k=k_value
+            batch_matches = index.search(
+                query_vectors,
+                count=k_value,
             )
 
-            # Store results
             for i, qid in enumerate(batch_query_ids):
-                all_query_results[qid] = (batch_indexes[i], batch_distances[i])
+                query_matches = batch_matches[i]
+
+                all_query_results[qid] = (
+                    query_matches.keys,
+                    query_matches.distances,
+                )
 
         print("Index querying complete")
 
@@ -176,11 +181,13 @@ def mine_negatives(args):
                 negatives = []
                 negative_scores = []
                 for ind, distance in zip(indexes, distances):
+                    ind = int(ind)
+                    distance = float(distance)
+
                     if ind not in positives_list:
                         negatives.append(ind)
-                        negative_scores.append(
-                            1 - distance
-                        )  # Convert distance to similarity
+                        negative_scores.append(1.0 - distance)
+
                         if len(negatives) >= args.num_negatives:
                             break
 
