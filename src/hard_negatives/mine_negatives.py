@@ -6,13 +6,13 @@ import json
 import numpy as np
 
 from accelerate import Accelerator
-from accelerate.utils import gather_object
 from datasets import Dataset, Features, Value
 from hard_negatives.data_loader import load_pair_dataset
 
 from voyager import Index, Space
 
 from hard_negatives.prepare_model import load_model
+from hard_negatives.embed import distributed_encode
 
 
 def mine_negatives(args):
@@ -34,42 +34,30 @@ def mine_negatives(args):
     ]
 
     if accelerator.is_main_process:
-        index = Index(Space.Cosine, num_dimensions=args.num_dim, M=args.hnsw_m, ef_construction=args.hnsw_ef)
+        index = Index(
+            Space.Cosine,
+            num_dimensions=args.num_dim,
+            M=args.hnsw_m,
+            ef_construction=args.hnsw_ef,
+        )
         doc_id_to_embedding = {}
 
-    # Process documents in chunks
-    dataset = [unique_index_to_doc_text[i] for i in process_indices]
-    num_chunks = (len(dataset) + args.gather_chunk_size - 1) // args.gather_chunk_size
+        def handle_documents(embeddings, indices):
+            index.add_items(embeddings, indices)
+            doc_id_to_embedding.update(zip(indices, embeddings))
+    else:
+        handle_documents = None
 
-    if accelerator.is_main_process:
-        print(f"Processing documents in {num_chunks} chunks...")
-
-    for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * args.gather_chunk_size
-        end_idx = min((chunk_idx + 1) * args.gather_chunk_size, len(dataset))
-
-        chunk_dataset = dataset[start_idx:end_idx]
-        chunk_indices = process_indices[start_idx:end_idx]
-
-        embeddings = model.encode(chunk_dataset, batch_size=args.mini_batch, show_progress_bar=True)
-        full_embeddings = gather_object(embeddings)
-        full_indices = gather_object(chunk_indices)
-
-        if accelerator.is_main_process:
-            index.add_items(full_embeddings, full_indices)
-
-            for embedding, indice in zip(full_embeddings, full_indices):
-                doc_id_to_embedding[indice] = embedding
-
-        # Free memory after each chunk
-        del full_embeddings
-        del full_indices
-        del embeddings
-
-        if accelerator.is_main_process:
-            print(f"Processed document chunk {chunk_idx + 1}/{num_chunks}")
-
-    accelerator.wait_for_everyone()
+    distributed_encode(
+        unique_index_to_doc_text,
+        process_indices,
+        model=model,
+        accelerator=accelerator,
+        chunk_size=args.gather_chunk_size,
+        batch_size=args.mini_batch,
+        label="documents",
+        on_main_process=handle_documents,
+    )
 
     # Process queries in chunks
     process_indices = list(range(len(queries)))[
@@ -79,36 +67,21 @@ def mine_negatives(args):
     if accelerator.is_main_process:
         query_id_to_embedding = {}
 
-    dataset = [queries[i] for i in process_indices]
-    num_chunks = (len(dataset) + args.gather_chunk_size - 1) // args.gather_chunk_size
+        def handle_queries(embeddings, indices):
+            query_id_to_embedding.update(zip(indices, embeddings))
+    else:
+        handle_queries = None
 
-    if accelerator.is_main_process:
-        print(f"Processing queries in {num_chunks} chunks...")
-
-    for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * args.gather_chunk_size
-        end_idx = min((chunk_idx + 1) * args.gather_chunk_size, len(dataset))
-
-        chunk_dataset = dataset[start_idx:end_idx]
-        chunk_indices = process_indices[start_idx:end_idx]
-
-        embeddings = model.encode(chunk_dataset, batch_size=args.mini_batch, show_progress_bar=True)
-        full_embeddings = gather_object(embeddings)
-        full_indices = gather_object(chunk_indices)
-
-        if accelerator.is_main_process:
-            for embedding, indice in zip(full_embeddings, full_indices):
-                query_id_to_embedding[indice] = embedding
-
-        # Free memory after each chunk
-        del full_embeddings
-        del full_indices
-        del embeddings
-
-        if accelerator.is_main_process:
-            print(f"Processed query chunk {chunk_idx + 1}/{num_chunks}")
-
-    accelerator.wait_for_everyone()
+    distributed_encode(
+        queries,
+        process_indices,
+        model=model,
+        accelerator=accelerator,
+        chunk_size=args.gather_chunk_size,
+        batch_size=args.mini_batch,
+        label="queries",
+        on_main_process=handle_queries,
+    )
 
     # exit non-main processes after ALL processing is complete
     if not accelerator.is_main_process:
@@ -159,7 +132,7 @@ def mine_negatives(args):
 
         # Batch query the index
         query_ids_list = list(positives.keys())
-        num_query_batches = (len(query_ids_list) + args.query_batch_size - 1) // QUERY_BATCH_SIZE
+        num_query_batches = (len(query_ids_list) + args.query_batch_size - 1) // args.query_batch_size
 
         all_query_results = {}  # Store results: query_id -> (indexes, distances)
 
