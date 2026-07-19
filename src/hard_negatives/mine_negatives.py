@@ -12,6 +12,7 @@ from voyager import Index, Space
 from hard_negatives.prepare_model import load_model
 from hard_negatives.embed import distributed_encode
 from hard_negatives.reporting import create_report
+from hard_negatives.upload_dataset import upload_text_dataset
 
 
 def mine_negatives(args):
@@ -88,47 +89,23 @@ def mine_negatives(args):
     if accelerator.is_main_process:
         # Prepare three datasets
 
-        # 1. Documents dataset (document_id, document_text)
-        documents_rows = []
-        for doc_id, doc_text in unique_index_to_doc_text.items():
-            documents_rows.append({"document_id": doc_id, "document": doc_text})
-
-        documents_features = Features(
-            {
-                "document_id": Value("int64"),
-                "document": Value("large_string"),
-            }
-        )
-        documents_dataset = Dataset.from_list(
-            documents_rows, features=documents_features
-        )
-        documents_dataset.push_to_hub(
-            args.path_to_hub_upload,
+        upload_text_dataset(
+            unique_index_to_doc_text,
+            id_column="document_id",
+            text_column="document",
             config_name="documents",
-            data_dir="documents",
-            split=dataset_name,
+            dataset_name=dataset_name,
+            hub_path=args.path_to_hub_upload,
         )
-        print(f"Pushed documents dataset with {len(documents_rows)} documents")
 
-        # 2. Queries dataset (query_id, query_text)
-        queries_rows = []
-        for query_id, query_text in queries.items():
-            queries_rows.append({"query_id": query_id, "query": query_text})
-
-        queries_features = Features(
-            {
-                "query_id": Value("int64"),
-                "query": Value("large_string"),
-            }
-        )
-        queries_dataset = Dataset.from_list(queries_rows, features=queries_features)
-        queries_dataset.push_to_hub(
-            args.path_to_hub_upload,
+        upload_text_dataset(
+            queries,
+            id_column="query_id",
+            text_column="query",
             config_name="queries",
-            data_dir="queries",
-            split=dataset_name,
+            dataset_name=dataset_name,
+            hub_path=args.path_to_hub_upload,
         )
-        print(f"Pushed queries dataset with {len(queries_rows)} queries")
 
         # 3. Scores dataset (query_id, document_ids, scores)
         scores_rows = []

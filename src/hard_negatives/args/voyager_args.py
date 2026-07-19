@@ -34,7 +34,7 @@ def parse_args():
         "--mini_batch",
         type=int,
         default=50,
-        help=f"Batch size for encoding (default: 50)",
+        help="Batch size for encoding (default: 50)",
     )
     parser.add_argument(
         "--test",
@@ -45,19 +45,19 @@ def parse_args():
         "--num_negatives",
         type=int,
         default=2048,
-        help=f"Number of negative samples to keep per positive (default: 2048)",
+        help="Number of negative samples to keep per positive (default: 2048)",
     )
     parser.add_argument(
         "--nvembed_threshold",
         type=float,
         default=0.95,
-        help=f"Threshold for filtering negatives: keep negatives with sim < threshold * positive_sim (default: 0.95)",
+        help="Threshold for filtering negatives: keep negatives with sim < threshold * positive_sim (default: 0.95)",
     )
     parser.add_argument(
         "--max_negatives_filter",
         type=int,
         default=10,
-        help=f"Maximum number of negatives to keep after threshold filtering (default: 10)",
+        help="Maximum number of negatives to keep after threshold filtering (default: 10)",
     )
     parser.add_argument(
         "--k_buffer",
