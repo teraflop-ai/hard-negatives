@@ -1,8 +1,4 @@
-from pathlib import Path
-
 import argparse
-
-DEFAULT_REPORT_OUTPUT_DIR = str(Path(__file__).resolve().parent / "output" / "filtering_reports")
 
 
 def parse_args():
@@ -72,9 +68,29 @@ def parse_args():
         help=f"Maximum number of negatives to keep after threshold filtering (default: 10)",
     )
     parser.add_argument(
+        "--k_buffer",
+        type=int,
+        default=500,
+    )
+    parser.add_argument(
+        "--gather_chunk_size",
+        type=int,
+        default=2000,
+    )
+    parser.add_argument(
+        "--query_batch_size",
+        type=int,
+        default=1000
+    )
+    parser.add_argument(
+        "--path_to_hub_upload",
+        type=str,
+        default="TeraflopAI/mined_example"
+    )
+    parser.add_argument(
         "--report_output_dir",
         type=str,
-        default=DEFAULT_REPORT_OUTPUT_DIR,
+        default="report_directory",
         help="Directory to save filtering analysis reports",
     )
 

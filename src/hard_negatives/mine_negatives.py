@@ -15,17 +15,6 @@ from voyager import Index, Space
 from hard_negatives.prepare_model import load_model
 
 
-PATH_TO_HUB_UPLOAD = "TeraflopAI/mined_example"
-
-GATHER_CHUNK_SIZE = 2000
-QUERY_BATCH_SIZE = 1000
-
-
-# Extra buffer added to k when querying the index, to leave room for positives/dupes
-K_BUFFER = 500
-
-
-
 def mine_negatives(args):
     dataset_name = Path(args.input_path).stem
 
@@ -50,14 +39,14 @@ def mine_negatives(args):
 
     # Process documents in chunks
     dataset = [unique_index_to_doc_text[i] for i in process_indices]
-    num_chunks = (len(dataset) + GATHER_CHUNK_SIZE - 1) // GATHER_CHUNK_SIZE
+    num_chunks = (len(dataset) + args.gather_chunk_size - 1) // args.gather_chunk_size
 
     if accelerator.is_main_process:
         print(f"Processing documents in {num_chunks} chunks...")
 
     for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * GATHER_CHUNK_SIZE
-        end_idx = min((chunk_idx + 1) * GATHER_CHUNK_SIZE, len(dataset))
+        start_idx = chunk_idx * args.gather_chunk_size
+        end_idx = min((chunk_idx + 1) * args.gather_chunk_size, len(dataset))
 
         chunk_dataset = dataset[start_idx:end_idx]
         chunk_indices = process_indices[start_idx:end_idx]
@@ -91,14 +80,14 @@ def mine_negatives(args):
         query_id_to_embedding = {}
 
     dataset = [queries[i] for i in process_indices]
-    num_chunks = (len(dataset) + GATHER_CHUNK_SIZE - 1) // GATHER_CHUNK_SIZE
+    num_chunks = (len(dataset) + args.gather_chunk_size - 1) // args.gather_chunk_size
 
     if accelerator.is_main_process:
         print(f"Processing queries in {num_chunks} chunks...")
 
     for chunk_idx in range(num_chunks):
-        start_idx = chunk_idx * GATHER_CHUNK_SIZE
-        end_idx = min((chunk_idx + 1) * GATHER_CHUNK_SIZE, len(dataset))
+        start_idx = chunk_idx * args.gather_chunk_size
+        end_idx = min((chunk_idx + 1) * args.gather_chunk_size, len(dataset))
 
         chunk_dataset = dataset[start_idx:end_idx]
         chunk_indices = process_indices[start_idx:end_idx]
@@ -140,7 +129,7 @@ def mine_negatives(args):
         })
         documents_dataset = Dataset.from_list(documents_rows, features=documents_features)
         documents_dataset.push_to_hub(
-            PATH_TO_HUB_UPLOAD,
+            args.path_to_hub_upload,
             config_name="documents",
             data_dir="documents",
             split=dataset_name,
@@ -158,7 +147,7 @@ def mine_negatives(args):
         })
         queries_dataset = Dataset.from_list(queries_rows, features=queries_features)
         queries_dataset.push_to_hub(
-            PATH_TO_HUB_UPLOAD,
+            args.path_to_hub_upload,
             config_name="queries",
             data_dir="queries",
             split=dataset_name,
@@ -170,13 +159,13 @@ def mine_negatives(args):
 
         # Batch query the index
         query_ids_list = list(positives.keys())
-        num_query_batches = (len(query_ids_list) + QUERY_BATCH_SIZE - 1) // QUERY_BATCH_SIZE
+        num_query_batches = (len(query_ids_list) + args.query_batch_size - 1) // QUERY_BATCH_SIZE
 
         all_query_results = {}  # Store results: query_id -> (indexes, distances)
 
         for batch_idx in range(num_query_batches):
-            start_idx = batch_idx * QUERY_BATCH_SIZE
-            end_idx = min((batch_idx + 1) * QUERY_BATCH_SIZE, len(query_ids_list))
+            start_idx = batch_idx * args.query_batch_size
+            end_idx = min((batch_idx + 1) * args.query_batch_size, len(query_ids_list))
 
             batch_query_ids = query_ids_list[start_idx:end_idx]
             query_embeddings_batch = [query_id_to_embedding[qid] for qid in batch_query_ids]
@@ -185,7 +174,7 @@ def mine_negatives(args):
                 f"Querying index for batch {batch_idx + 1}/{num_query_batches} ({len(batch_query_ids)} queries)..."
             )
             # Query with extra buffer to account for potential duplicates and positives
-            k_value = min(args.num_negatives + K_BUFFER, len(unique_index_to_doc_text))
+            k_value = min(args.num_negatives + args.k_buffer, len(unique_index_to_doc_text))
             batch_indexes, batch_distances = index.query(query_embeddings_batch, k=k_value)
 
             # Store results
@@ -303,7 +292,7 @@ def mine_negatives(args):
 
         scores_dataset = Dataset.from_list(scores_rows, features=scores_features)
         scores_dataset.push_to_hub(
-            PATH_TO_HUB_UPLOAD,
+            args.path_to_hub_upload,
             config_name="scores",
             data_dir="scores",
             split=dataset_name,
