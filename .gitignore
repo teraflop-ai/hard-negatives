@@ -10,3 +10,4 @@ wheels/
 .venv
 
 parquets/
+report_directory/
