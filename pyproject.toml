@@ -1,6 +1,6 @@
 [project]
 name = "hard-negatives"
-version = "0.1.7"
+version = "0.1.8"
 description = "Mine hard negatives from text datasets."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,3 +22,6 @@ flash-attn = [{ requirement = "torch", match-runtime = true }]
 [tool.uv.extra-build-variables]
 # The docs suggest this ensures a wheel install, but it actually forces a hollow install if no wheel is found.
 flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]
