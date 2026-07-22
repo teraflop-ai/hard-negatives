@@ -1,6 +1,7 @@
 ## Installation
 ```bash
-uv pip install hard-negatives
+uv pip install hard-negatives \
+    --no-build-isolation-package flash-attn
 ```
 
 ## Usage
