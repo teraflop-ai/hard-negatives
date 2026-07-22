@@ -17,8 +17,4 @@ dependencies = [
 ]
 
 [tool.uv.extra-build-dependencies]
-flash-attn = [{ requirement = "torch", match-runtime = true }]
-
-[tool.uv.extra-build-variables]
-# The docs suggest this ensures a wheel install, but it actually forces a hollow install if no wheel is found.
-flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
+flash-attn = ["torch"]
