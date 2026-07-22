@@ -90,7 +90,7 @@ def parse_args():
     parser.add_argument(
         "--upload",
         type=bool,
-        default=True,
+        default=False,
         help="whether to upload the queries, documents, and scores to Hugging Face hub.",
     )
     parser.add_argument(
