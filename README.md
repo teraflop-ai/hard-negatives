@@ -19,7 +19,7 @@ uvx ruff check --select I --fix .
 ```bibtex
 @software{shippole2026hardnegatives,
   title        = {Hard Negatives: A Python Library for Mining Hard Negative Examples},
-  author       = {Shippole, Enrico and Chaffin, Antoine and Aarsen, Tom},
+  author       = {Shippole, Enrico and Chaffin, Antoine and Aarsen, Tom and Jitsev, Jenia},
   year         = {2026},
   url          = {https://github.com/teraflop-ai/hard-negatives},
   version      = {1.0.0},
