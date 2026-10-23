@@ -1,24 +1,25 @@
-from datasets import load_dataset
+import daft
+from daft import DataType, col
+
+from hard_negatives.runner import init_runner
 
 
-def load_pair_dataset(path: str, query: str = "query", document: str = "document"):
-    data = load_dataset("parquet", data_files=path, split="train")
+def text_hash(expr):
+    return (
+        expr.hash().shift_right(1).cast(DataType.int64())
+    )  # 63-bit xxhash: uint64 -> int64 without overflow nulls
 
-    query_to_id = {}
-    document_to_id = {}
-    positives = {}
 
-    for query, document in zip(data[query], data[document]):
-        query_id = query_to_id.setdefault(query, len(query_to_id))
-        document_id = document_to_id.setdefault(document, len(document_to_id))
-        positives.setdefault(query_id, set()).add(document_id)
-
-    queries = {query_id: query for query, query_id in query_to_id.items()}
-    documents = {
-        document_id: document for document, document_id in document_to_id.items()
-    }
-    positives = {
-        query_id: sorted(document_ids) for query_id, document_ids in positives.items()
-    }
-
-    return queries, documents, positives
+def prepare_stage(args):
+    """Stage 1 (one node): many small (query, doc) parquet files -> num_shards small (query, doc, query_hash, doc_hash)
+    parquet files with exact duplicate pairs removed. Hashes are the ids used by every later stage."""
+    init_runner(args.ray)
+    (
+        daft.read_parquet(args.input_path)
+        .select(col(args.query_column), col(args.document_column))
+        .distinct()
+        .with_column("query_hash", text_hash(col(args.query_column)))
+        .with_column("doc_hash", text_hash(col(args.document_column)))
+        .repartition(args.num_shards)
+        .write_parquet(f"{args.save_path}/pairs", write_mode="overwrite")
+    )

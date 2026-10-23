@@ -6,7 +6,17 @@ uv pip install hard-negatives
 ## Usage
 Mines hard negatives from existing query document pair datasets.
 ```bash
-accelerate launch --multi_gpu main.py --input_path /home/henry/hard_negatives/parquets/test_pairs.parquet
+# 1. prepare (one node, CPU): dedup pairs, add content hashes, write --num_shards small parquet files
+sbatch examples/prepare.sbatch --input_path "/data/pairs/*.parquet" --query_column anchor --document_column positive --num_shards 1024
+
+# 2. embed (Slurm array, one task per node, one Qwen3-Embedding-4B actor per GPU): query and doc embeddings per pair
+sbatch examples/embed.sbatch --query_column anchor --document_column positive
+
+# 3. search (Slurm array, one task per node, all GPUs): exact top-K negatives per pair, positives and duplicates masked
+sbatch examples/search.sbatch --query_column anchor --document_column positive
+
+# 4. training dataset (one node, CPU): anchor, positive, negative_1..N after the NV-Retriever 95% filter
+sbatch examples/nv_retriever.sbatch --query_column anchor --document_column positive
 ```
 
 ## Contributing

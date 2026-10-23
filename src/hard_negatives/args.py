@@ -1,115 +1,116 @@
 import argparse
+import os
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Mine hard negatives from a Hugging Face dataset."
+        description="Mine hard negatives from query-document pair parquet files, in stages."
     )
     parser.add_argument(
-        "--model_name",
-        type=str,
-        default="lightonai/DenseOn",
-        help="The sentence transformer model to use.",
-    )
-    parser.add_argument(
-        "--max_seq_len",
-        default=8192,
-        type=int,
-        help="The seqlen to use during encoding.",
+        "stage",
+        choices=["prepare", "embed", "search", "nv_retriever"],
+        help="prepare: dedup pairs + hashes (one node). embed: Slurm array, embeds its share of the pair files. "
+        "search: Slurm array x GPUs, exact top-K negatives per pair. nv_retriever: training dataset (one node).",
     )
     parser.add_argument(
         "--input_path",
         type=str,
-        help="The input path to parquet files.",
-    )
-    parser.add_argument("--num_dim", type=int, default=768)
-    parser.add_argument(
-        "--mini_batch",
-        type=int,
-        default=50,
-        help="Batch size for encoding (default: 50)",
-    )
-    parser.add_argument(
-        "--input_dataset",
-        type=str,
-        default="./saved_dataset",
-        help="Input dataset to use for filtering.",
-    )
-    parser.add_argument(
-        "--num_negatives",
-        type=int,
-        default=10,
-        help="Number of negative samples to keep per positive",
-    )
-    parser.add_argument(
-        "--nvembed_threshold",
-        type=float,
-        default=0.95,
-        help="Threshold for filtering negatives: keep negatives with sim < threshold * positive_sim",
-    )
-    parser.add_argument(
-        "--max_num_negatives",
-        type=int,
-        default=4,
-        help="Maximum number of negatives to keep after threshold filtering",
-    )
-    parser.add_argument(
-        "--k_buffer",
-        type=int,
-        default=500,
-    )
-    parser.add_argument(
-        "--gather_chunk_size",
-        type=int,
-        default=2000,
-    )
-    parser.add_argument(
-        "--query_column",
-        type=str,
-        default="query",
-        help="The name of query column from the pair dataset.",
-    )
-    parser.add_argument(
-        "--document_column",
-        type=str,
-        default="document",
-        help="The name of the document column from the pair dataset.",
-    )
-    parser.add_argument(
-        "--query_batch_size", type=int, default=1000, help="The batch to scan the index"
-    )
-    parser.add_argument(
-        "--path_to_hub_upload", type=str, default="TeraflopAI/mined_example"
+        help="prepare stage: glob of the input (query, doc) parquet files",
     )
     parser.add_argument(
         "--save_path",
         type=str,
         default="saved_dataset",
-        help="whether to save the queries, documents, and scores to local disk.",
+        help="Root for pairs/, emb/, scores/",
     )
+    parser.add_argument("--query_column", type=str, default="query")
+    parser.add_argument("--document_column", type=str, default="document")
+    parser.add_argument(
+        "--num_shards",
+        type=int,
+        default=256,
+        help="prepare stage: number of output parquet files",
+    )
+    parser.add_argument(
+        "--ray",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="run Daft on a local Ray cluster",
+    )
+    parser.add_argument(
+        "--num_tasks",
+        type=int,
+        help="embed/search stages: override SLURM_ARRAY_TASK_COUNT",
+    )
+    parser.add_argument(
+        "--copy_input",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="embed stage: stage input files to /tmp first",
+    )
+    # embed
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-Embedding-4B")
+    parser.add_argument(
+        "--query_instruction",
+        type=str,
+        default="Instruct: Given a natural language description, retrieve the code that implements it\nQuery:",
+        help="Replaces the model's saved `query` prompt; documents use the saved `document` prompt",
+    )
+    parser.add_argument("--embedding_dim", type=int, default=2560)
+    parser.add_argument("--max_seq_len", type=int, default=2048)
+    parser.add_argument("--attn_implementation", type=str, default="flash_attention_3")
+    parser.add_argument(
+        "--mini_batch", type=int, default=32, help="GPU batch inside encode()"
+    )
+    parser.add_argument(
+        "--rows_per_call",
+        type=int,
+        default=4096,
+        help="Rows per Daft UDF call (length-sorted inside)",
+    )
+    parser.add_argument(
+        "--gpus", type=float, default=1, help="GPUs per Daft embedding actor"
+    )
+    parser.add_argument(
+        "--max_concurrency",
+        type=int,
+        default=int(os.environ.get("SLURM_GPUS_ON_NODE", 0)) or None,
+        help="Number of embedding actors (= GPUs on the node); defaults to SLURM_GPUS_ON_NODE",
+    )
+    # search
+    parser.add_argument(
+        "--num_negatives", type=int, default=100, help="K candidates stored per pair"
+    )
+    parser.add_argument(
+        "--query_chunk_size", type=int, default=1024, help="Queries per GEMM"
+    )
+    parser.add_argument(
+        "--doc_chunk_size",
+        type=int,
+        default=1_000_000,
+        help="Corpus rows resident on the GPU per pass",
+    )
+    # nv_retriever
+    parser.add_argument(
+        "--nvembed_threshold",
+        type=float,
+        default=0.95,
+        help="Keep negatives with score < threshold * positive score",
+    )
+    parser.add_argument(
+        "--max_num_negatives",
+        type=int,
+        default=4,
+        help="Negatives per pair in the training dataset",
+    )
+    parser.add_argument("--prepared_dataset", type=str, default="./mined_dataset")
     parser.add_argument(
         "--upload",
-        type=bool,
-        default=True,
-        help="whether to upload the queries, documents, and scores to Hugging Face hub.",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Push the training dataset to the hub",
     )
     parser.add_argument(
-        "--local",
-        type=bool,
-        default=True,
-        help="whether to saved the mined dataset to disk.",
+        "--path_to_hub_upload", type=str, default="TeraflopAI/mined_example"
     )
-    parser.add_argument(
-        "--prepared_dataset",
-        type=str,
-        default="./mined_dataset",
-        help="The saved mined dataset to use for training.",
-    )
-    parser.add_argument(
-        "--report_output_dir",
-        type=str,
-        default="report_directory",
-        help="Directory to save filtering analysis reports",
-    )
-
     return parser.parse_args()

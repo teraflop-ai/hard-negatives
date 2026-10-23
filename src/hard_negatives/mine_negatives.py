@@ -1,230 +1,134 @@
-import sys
-from pathlib import Path
+import os
 
-import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import torch
 from accelerate import Accelerator
-from datasets import Dataset, Features, Value
 
-from hard_negatives.data_loader import load_pair_dataset
-from hard_negatives.embed import distributed_encode
-from hard_negatives.index_factory import build_index
-from hard_negatives.prepare_model import load_model
-from hard_negatives.save_dataset import save_text_dataset
+from hard_negatives.runner import parquet_files, shard_files, slurm_task
 
 
-def mine_negatives(args):
-    dataset_name = Path(args.input_path).stem
-
-    queries, unique_index_to_doc_text, positives = load_pair_dataset(
-        args.input_path,
-        query=args.query_column,
-        document=args.document_column,
+def read(file, columns):
+    t = pq.read_table(file, columns=columns)
+    emb = lambda c: torch.from_numpy(
+        t[c].combine_chunks().flatten().to_numpy().reshape(len(t), -1)
     )
+    ints = lambda c: torch.from_numpy(t[c].to_numpy())
+    return {c: (emb(c) if c.endswith("_embedding") else ints(c)) for c in columns}
 
-    model = load_model(args.model_name, args.max_seq_len)
 
-    accelerator = Accelerator()
-    model = accelerator.prepare(model)
+def corpus_chunks(files, rows):
+    """Stream every document in the corpus: yields (doc_embedding, doc_hash) of ~rows rows at a time."""
+    batch, n = [], 0
+    for f in files + [None]:
+        if f is not None:
+            batch.append(read(f, ["doc_embedding", "doc_hash"]))
+            n += len(batch[-1]["doc_hash"])
+        if batch and (n >= rows or f is None):
+            yield tuple(
+                torch.cat([b[c] for b in batch]) for c in ("doc_embedding", "doc_hash")
+            )
+            batch, n = [], 0
 
-    # build distributed index for all unique documents
-    unique_doc_indices = sorted(unique_index_to_doc_text.keys())
-    process_indices = unique_doc_indices[
-        accelerator.process_index :: accelerator.num_processes
+
+def matches(sorted_keys, keys):
+    """All positions in sorted_keys equal to each key: returns (index into keys, position in sorted_keys)."""
+    lo, hi = (
+        torch.searchsorted(sorted_keys, keys),
+        torch.searchsorted(sorted_keys, keys, right=True),
+    )
+    counts = hi - lo
+    which = torch.repeat_interleave(torch.arange(len(keys), device=keys.device), counts)
+    offsets = torch.arange(
+        int(counts.sum()), device=keys.device
+    ) - torch.repeat_interleave(counts.cumsum(0) - counts, counts)
+    return which, torch.repeat_interleave(lo, counts) + offsets
+
+
+def dedup_rows(scores, hashes):
+    """Keep the best-scoring copy of each hash per row (-1 / -inf for the rest), rows re-sorted by score."""
+    order = hashes.sort(
+        dim=1, stable=True
+    ).indices  # rows arrive sorted by score desc, so the first of equal hashes wins
+    sorted_hashes = hashes.gather(1, order)
+    dup = torch.zeros_like(hashes, dtype=torch.bool).scatter_(
+        1, order[:, 1:], sorted_hashes[:, 1:] == sorted_hashes[:, :-1]
+    )
+    scores, idx = scores.masked_fill(dup, -torch.inf).sort(1, descending=True)
+    return scores, hashes.masked_fill(dup, -1).gather(1, idx)
+
+
+def search_stage(args):
+    """Stage 3 (Slurm array x GPUs): each process takes a share of the embedded files (its queries), streams the whole
+    corpus through the GPU, and writes those files back with top-K negatives referenced by doc_hash. Every positive
+    of a query (all pairs sharing its query_hash) and every duplicate of those docs is masked."""
+    acc = Accelerator()
+    device = acc.device
+    task_id, count = slurm_task()
+    num_tasks = args.num_tasks or count
+    K, QC, DC = args.num_negatives, args.query_chunk_size, args.doc_chunk_size
+    corpus = parquet_files(f"{args.save_path}/emb")
+    files = shard_files(corpus, task_id, num_tasks)[
+        acc.process_index :: acc.num_processes
     ]
+    if not files:
+        return
 
-    if accelerator.is_main_process:
-        index = build_index(args)
-
-        doc_id_to_embedding = {}
-
-        def handle_documents(embeddings, indices):
-            keys = np.asarray(indices, dtype=np.uint64)
-            vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
-            index.add(keys, vectors)
-            doc_id_to_embedding.update(
-                (int(key), vector) for key, vector in zip(keys, vectors)
-            )
-    else:
-        handle_documents = None
-
-    distributed_encode(
-        unique_index_to_doc_text,
-        process_indices,
-        model=model,
-        accelerator=accelerator,
-        chunk_size=args.gather_chunk_size,
-        batch_size=args.mini_batch,
-        label="documents",
-        on_main_process=handle_documents,
+    pairs = pq.read_table(
+        f"{args.save_path}/pairs", columns=["query_hash", "doc_hash"]
+    ).sort_by("query_hash")
+    pair_q, pair_d = (
+        torch.from_numpy(pairs["query_hash"].to_numpy()),
+        torch.from_numpy(pairs["doc_hash"].to_numpy()),
     )
-
-    # Process queries in chunks
-    process_indices = list(range(len(queries)))[
-        accelerator.process_index :: accelerator.num_processes
-    ]
-
-    if accelerator.is_main_process:
-        query_id_to_embedding = {}
-
-        def handle_queries(embeddings, indices):
-            query_id_to_embedding.update(zip(indices, embeddings))
-    else:
-        handle_queries = None
-
-    distributed_encode(
-        queries,
-        process_indices,
-        model=model,
-        accelerator=accelerator,
-        chunk_size=args.gather_chunk_size,
-        batch_size=args.mini_batch,
-        label="queries",
-        on_main_process=handle_queries,
+    mine = [read(f, ["query_embedding", "doc_embedding", "query_hash"]) for f in files]
+    sizes = [len(m["query_hash"]) for m in mine]
+    queries, q_hash = (
+        torch.cat([m[c] for m in mine]) for c in ("query_embedding", "query_hash")
     )
+    positive_scores = torch.cat(
+        [
+            (m["query_embedding"].float() * m["doc_embedding"].float()).sum(1)
+            for m in mine
+        ]
+    )
+    del mine
 
-    # exit non-main processes after ALL processing is complete
-    if not accelerator.is_main_process:
-        print(f"Rank {accelerator.process_index} finished all processing, exiting")
-        sys.exit(0)
+    best_scores = torch.full((len(queries), K), -torch.inf, device=device)
+    best_hashes = torch.full((len(queries), K), -1, dtype=torch.long, device=device)
+    for d, d_hash in corpus_chunks(corpus, DC):
+        d, d_hash = d.to(device), d_hash.to(device)
+        d_sorted, d_order = d_hash.sort()
+        for a in range(0, len(queries), QC):
+            q = queries[a : a + QC].to(device)
+            local, positives = matches(
+                pair_q, q_hash[a : a + QC]
+            )  # every positive doc of each query in the chunk
+            which, pos = matches(d_sorted, pair_d[positives].to(device))
+            scores = q @ d.T
+            scores[local.to(device)[which], d_order[pos]] = -torch.inf
+            v, i = scores.topk(min(K, len(d)), 1)
+            merged, j = torch.cat([best_scores[a : a + QC], v.float()], 1).topk(K, 1)
+            best_scores[a : a + QC] = merged
+            best_hashes[a : a + QC] = torch.cat(
+                [best_hashes[a : a + QC], d_hash[i]], 1
+            ).gather(1, j)
+    best_scores, best_hashes = dedup_rows(best_scores.cpu(), best_hashes.cpu())
 
-    if accelerator.is_main_process:
-        # Prepare three datasets
-
-        save_text_dataset(
-            unique_index_to_doc_text,
-            id_column="document_id",
-            text_column=args.document_column,
-            config_name="documents",
-            dataset_name=dataset_name,
-            hub_path=args.path_to_hub_upload,
-            save_path=f"{args.save_path}/documents",
-            upload=args.upload,
+    fixed = lambda x: pa.FixedSizeListArray.from_arrays(
+        pa.array(x.contiguous().numpy().ravel()), x.shape[1]
+    )
+    out_dir = f"{args.save_path}/scores/task_{task_id:05d}"
+    os.makedirs(out_dir, exist_ok=True)
+    start = 0
+    for f, n in zip(files, sizes):
+        t = pq.read_table(
+            f,
+            columns=[args.query_column, args.document_column, "query_hash", "doc_hash"],
         )
-
-        save_text_dataset(
-            queries,
-            id_column="query_id",
-            text_column=args.query_column,
-            config_name="queries",
-            dataset_name=dataset_name,
-            hub_path=args.path_to_hub_upload,
-            save_path=f"{args.save_path}/queries",
-            upload=args.upload,
-        )
-
-        # 3. Scores dataset (query_id, document_ids, scores)
-        scores_rows = []
-
-        # Batch query the index
-        query_ids_list = list(positives.keys())
-        num_query_batches = (
-            len(query_ids_list) + args.query_batch_size - 1
-        ) // args.query_batch_size
-
-        all_query_results = {}  # Store results: query_id -> (indexes, distances)
-
-        for batch_idx in range(num_query_batches):
-            start_idx = batch_idx * args.query_batch_size
-            end_idx = min((batch_idx + 1) * args.query_batch_size, len(query_ids_list))
-
-            batch_query_ids = query_ids_list[start_idx:end_idx]
-            query_vectors = np.ascontiguousarray(
-                [query_id_to_embedding[qid] for qid in batch_query_ids],
-                dtype=np.float32,
-            )
-
-            print(
-                f"Querying index for batch {batch_idx + 1}/{num_query_batches} ({len(batch_query_ids)} queries)..."
-            )
-            # Query with extra buffer to account for potential duplicates and positives
-            k_value = min(
-                args.num_negatives + args.k_buffer, len(unique_index_to_doc_text)
-            )
-            batch_matches = index.search(
-                query_vectors,
-                count=k_value,
-            )
-
-            for i, qid in enumerate(batch_query_ids):
-                query_matches = batch_matches[i]
-
-                all_query_results[qid] = (
-                    query_matches.keys,
-                    query_matches.distances,
-                )
-
-        print("Index querying complete")
-
-        # Process results for each query
-        for query_id in query_ids_list:
-            indexes, distances = all_query_results[query_id]
-            positives_list = positives[query_id]
-
-            for positive in positives_list:
-                document_ids = []
-                scores_list = []
-
-                # Calculate similarity for positive (first element)
-                positive_simi = np.dot(
-                    query_id_to_embedding[query_id], doc_id_to_embedding[positive]
-                ) / (
-                    np.linalg.norm(query_id_to_embedding[query_id])
-                    * np.linalg.norm(doc_id_to_embedding[positive])
-                )
-
-                # Add positive as first element
-                document_ids.append(positive)
-                scores_list.append(float(positive_simi))
-
-                # Add negatives with their distances converted to similarities
-                negatives = []
-                negative_scores = []
-                for ind, distance in zip(indexes, distances):
-                    ind = int(ind)
-                    distance = float(distance)
-
-                    if ind not in positives_list:
-                        negatives.append(ind)
-                        negative_scores.append(1.0 - distance)
-
-                        if len(negatives) >= args.num_negatives:
-                            break
-
-                # Only create row if we have enough negatives
-                if len(negatives) < args.num_negatives:
-                    continue
-
-                # Add negative document IDs and scores
-                document_ids.extend(negatives)
-                scores_list.extend(negative_scores)
-
-                scores_rows.append(
-                    {
-                        "query_id": query_id,
-                        "document_ids": document_ids,
-                        "scores": scores_list,
-                    }
-                )
-
-        scores_features = Features(
-            {
-                "query_id": Value("int64"),
-                "document_ids": [Value("int64")],
-                "scores": [Value("float64")],
-            }
-        )
-
-        scores_dataset = Dataset.from_list(scores_rows, features=scores_features)
-        scores_dataset.save_to_disk(
-            f"{args.save_path}/scores",
-        )
-        if args.upload:
-            scores_dataset.push_to_hub(
-                args.path_to_hub_upload,
-                config_name="scores",
-                data_dir="scores",
-                split=dataset_name,
-            )
-            print(f"Pushed scores dataset with {len(scores_rows)} query-document pairs")
-
-        print(f"All three datasets pushed successfully for {dataset_name}")
+        rows = slice(start, start + n)
+        t = t.append_column("positive_score", pa.array(positive_scores[rows].numpy()))
+        t = t.append_column("negative_hashes", fixed(best_hashes[rows]))
+        t = t.append_column("negative_scores", fixed(best_scores[rows]))
+        pq.write_table(t, f"{out_dir}/{os.path.basename(f)}")
+        start += n
